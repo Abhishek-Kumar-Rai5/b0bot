@@ -15,3 +15,4 @@ langchain-pinecone
 sentence-transformers
 langchain-community>=0.0.38,<0.1.0
 langchain-openai>=0.0.38,<0.1.0
+feedparser

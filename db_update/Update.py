@@ -1,29 +1,27 @@
 import sys
 import os
+import json
+import hashlib
 from dotenv import dotenv_values
-from pinecone import Pinecone , ServerlessSpec
+from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from utils.rss_fetcher import RSSFetcher
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cybernews.CyberNews import CyberNews
 
 
 PINECONE_API = dotenv_values(".env").get("PINECONE_API_KEY")
 
-# configure client
 pc = Pinecone(api_key=PINECONE_API)
 index_name = "cybernews-index"
 
-# Delete the index if it already exists, so as to save storage
-if index_name in pc.list_indexes().names():
-    pc.delete_index(index_name)
-    print(f"Deleted existing index: {index_name}")
-
-# Create or access the index
-if index_name not in pc.list_indexes():
+# Create index ONLY if not exists
+if index_name not in pc.list_indexes().names():
     pc.create_index(
-        name=index_name, 
-        dimension=384, 
+        name=index_name,
+        dimension=384,
         metric='cosine',
         spec=ServerlessSpec(
             cloud='aws',
@@ -31,61 +29,67 @@ if index_name not in pc.list_indexes():
         )
     )
 
-# Connect to the index
 index = pc.Index(index_name)
-
 namespace = "c2si"
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Different types of news
 news = CyberNews()
-
 newsBox = dict()
 
 newsBox["general_news"] = news.get_news("general")
-
 newsBox["cyber_attack_news"] = news.get_news("cyberAttack")
-
 newsBox["vulnerability_news"] = news.get_news("vulnerability")
-
 newsBox["malware_news"] = news.get_news("malware")
-
 newsBox["security_news"] = news.get_news("security")
+newsBox["data_breach_news"] = news.get_news("dataBreach")
 
-newsBox["data_breach_news"] = news.get_news("dataBreach")   
+# ---- RSS Integration ----
+try:
+    with open("config/rss_sources.json") as f:
+        rss_sources = json.load(f)
 
+    rss_articles = []
 
-"""
-News Format:
+    for name, url in rss_sources.items():
+        fetcher = RSSFetcher(url)
+        fetched = fetcher.fetch(limit=10)
 
-news = {
-    "id: ""
-    "headlines": "",
-    "author": "",
-    "fullNews": "",
-    "newsURL": "",
-    "newsImgURL":
-    "newsDate": "",
-}
+        for item in fetched:
+            url_hash = hashlib.md5(item["url"].encode()).hexdigest()
 
-Notice: "id" should be removed before the news is inserted into the database. newsImgURL also not important right now.
-"""
+            rss_articles.append({
+                "id": f"rss_{name}_{url_hash}",
+                "headlines": item["title"],
+                "author": name,
+                "fullNews": item["title"],
+                "newsURL": item["url"],
+                "newsImgURL": "",
+                "newsDate": item["date"]
+            })
 
-# Convert news articles to vectors and upsert into Pinecone
+    newsBox["rss_news"] = rss_articles
+    print(f"Added {len(rss_articles)} RSS articles")
+
+except Exception as e:
+    print("RSS loading failed:", e)
+
+# ---- Upsert ----
+existing_ids = set()
+
 for news_type, articles in newsBox.items():
     for article in articles:
-        # Combine headline and full news for embedding
+
+        document_id = str(article["id"])
+
+        if document_id in existing_ids:
+            continue
+
+        existing_ids.add(document_id)
+
         text = article["headlines"] + " " + article["fullNews"]
-        
-        # Convert text to vector
-        vector = model.encode(text).tolist()  # Ensure the vector is a list
-        
-        # Prepare the document ID (use unique identifiers from your data)
-        document_id = article["id"]
-        document_id = str(document_id)
-        
-        # Prepare metadata
+        vector = model.encode(text).tolist()
+
         metadata = {
             "headlines": article["headlines"],
             "author": article["author"],
@@ -94,8 +98,7 @@ for news_type, articles in newsBox.items():
             "newsImgURL": article["newsImgURL"],
             "newsDate": article["newsDate"]
         }
-        
-        # Upsert the vector with metadata into Pinecone
-        index.upsert([(document_id, vector, metadata)] , namespace=namespace)
-        
-        print(f"Inserted article ID: {document_id} with metadata into index: {index_name}")
+
+        index.upsert([(document_id, vector, metadata)], namespace=namespace)
+
+        print(f"Inserted article ID: {document_id}")

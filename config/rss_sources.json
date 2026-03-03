@@ -1,0 +1,5 @@
+{
+  "reddit_cybersecurity": "https://www.reddit.com/r/cybersecurity/.rss",
+  "exploit_db": "https://www.exploit-db.com/rss.xml",
+  "cisa_alerts": "https://www.cisa.gov/news.xml"
+}
